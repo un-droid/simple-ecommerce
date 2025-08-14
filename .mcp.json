@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest",
+        "--allowed-origins=http://localhost:3000",
+        "--block-service-workers"
+      ],
+      "env": {}
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest",
+        "--browser=chrome",                               // use chrome channel
+        "--isolated",                                     // clean in-memory profile (no extensions)
+        "--allowed-origins=http://localhost:3001;http://127.0.0.1:3001",
+        "--block-service-workers"                         // avoids sw interference
+      ],
+      "timeout": 600000
+    }
+  }
+}
