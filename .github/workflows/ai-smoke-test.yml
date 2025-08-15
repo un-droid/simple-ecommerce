@@ -71,21 +71,24 @@ jobs:
       - name: run ai tests via claude code
         shell: bash
         run: |
-          read -r -d '' DEFAULT << 'EOF'
-          use the "playwright" mcp server to test http://127.0.0.1:3000.
+          # set default test instructions
+          DEFAULT="use the \"playwright\" mcp server to test http://127.0.0.1:3000.
           steps:
             1) call browser_install if needed
-            2) browser_navigate to "/"
+            2) browser_navigate to \"/\"
             3) browser_snapshot
             4) click the first button named /add to cart/i
-            5) browser_navigate to "/cart"
+            5) browser_navigate to \"/cart\"
             6) read a total/subtotal; assert > 0 and show the value
-            7) browser_navigate to "/checkout"
-            8) browser_take_screenshot with filename "checkout.png"
-          output: a terse markdown report with each step, pass/fail, and durations.
-          EOF
+            7) browser_navigate to \"/checkout\"
+            8) browser_take_screenshot with filename \"checkout.png\"
+          output: a terse markdown report with each step, pass/fail, and durations."
+          
+          # use custom prompt if provided, otherwise use default
           PROMPT="${{ github.event.inputs.test_description }}"
-          [[ -z "$PROMPT" ]] && PROMPT="$DEFAULT"
+          if [[ -z "$PROMPT" ]]; then
+            PROMPT="$DEFAULT"
+          fi
 
           claude -p \
             --model sonnet \
