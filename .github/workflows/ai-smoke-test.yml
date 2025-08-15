@@ -1,48 +1,126 @@
-# .github/workflows/ai-test.yml
-name: AI Test
+name: AI Test (Manual)
 
 on:
-  workflow_dispatch:  # Manual trigger to save API costs
-  push:
-    branches: [main]
+  workflow_dispatch:  # Only manual trigger
+    inputs:
+      test_description:
+        description: 'Custom test instructions (optional)'
+        required: false
+        default: ''
 
 jobs:
-  test:
+  ai-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     
     steps:
-      - uses: actions/checkout@v4
-      
-      - uses: actions/setup-node@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
           
-      - name: Install deps
+      - name: Install dependencies
         run: |
           npm ci
-          # Install Playwright browsers (needed by MCP)
+          npm install -g @anthropic-ai/claude-code
           npx playwright install chromium
           
-      - name: Start app
+      - name: Start application
         run: |
           npm run dev &
-          npx wait-on http://localhost:3000
+          echo "Waiting for app to start..."
+          npx wait-on http://localhost:3000 --timeout 60000
+          echo "App is running!"
           
-      - name: Run AI Test
+      - name: Start Playwright MCP Server
+        run: |
+          echo "Starting Playwright MCP server..."
+          npx @playwright/mcp@latest --headless --port 8931 &
+          echo $! > mcp-server.pid
+          sleep 5  # Give server time to start
+          echo "MCP server started on port 8931"
+          
+      - name: Configure Claude Code
+        run: |
+          # Create MCP configuration for Claude Code
+          mkdir -p ~/.config/claude-code
+          cat > ~/.config/claude-code/mcp.json << 'EOF'
+          {
+            "mcpServers": {
+              "playwright": {
+                "url": "http://localhost:8931/mcp"
+              }
+            }
+          }
+          EOF
+          echo "Claude Code configured to use MCP server"
+          
+      - name: Run AI Tests
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MCP_CONFIG_PATH: ~/.config/claude-code/mcp.json
         run: |
-          # Install and run Claude Code with Playwright MCP
-          npx @anthropic-ai/claude-code@latest "
-            Use Playwright MCP to test http://localhost:3000:
-            - Navigate to homepage
-            - Check all main elements load
-            - Test navigation
-            - Test checkout flow
-            - Test order complete page
-            - Test payment method page
-            - Test breadcrumbs
-            - Try to add items to cart
-            - Report any issues found
-            - Generate a report of what was tested and each test result and duration
-          " --mcp "npx @playwright/mcp@latest --headless"
+          # Default test instructions
+          DEFAULT_TESTS="
+          Use Playwright MCP to test http://localhost:3000:
+          - Navigate to homepage
+          - Check all main elements load
+          - Test navigation
+          - Test checkout flow
+          - Test order complete page
+          - Test payment method page
+          - Test breadcrumbs
+          - Try to add items to cart
+          - Report any issues found
+          - Generate a report of what was tested and each test result and duration
+          "
+          
+          # Use custom instructions if provided, otherwise use default
+          TEST_INSTRUCTIONS="${{ github.event.inputs.test_description }}"
+          if [ -z "$TEST_INSTRUCTIONS" ]; then
+            TEST_INSTRUCTIONS="$DEFAULT_TESTS"
+          fi
+          
+          echo "Running AI tests..."
+          claude-code --config "$MCP_CONFIG_PATH" "$TEST_INSTRUCTIONS" > test-results.md 2>&1
+          
+          echo "Test completed!"
+          
+      - name: Display Results
+        if: always()
+        run: |
+          echo "## Test Results ##"
+          cat test-results.md
+          
+      - name: Upload Test Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-test-results-${{ github.run_number }}
+          path: test-results.md
+          retention-days: 30
+          
+      - name: Cleanup
+        if: always()
+        run: |
+          # Kill MCP server if still running
+          if [ -f mcp-server.pid ]; then
+            kill $(cat mcp-server.pid) 2>/dev/null || true
+          fi
+          
+      - name: Create Summary
+        if: always()
+        run: |
+          echo "# AI Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Run Number:** ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Triggered by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Test Output" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat test-results.md >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
