@@ -1,0 +1,48 @@
+# .github/workflows/ai-test.yml
+name: AI Test
+
+on:
+  workflow_dispatch:  # Manual trigger to save API costs
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - name: Install deps
+        run: |
+          npm ci
+          # Install Playwright browsers (needed by MCP)
+          npx playwright install chromium
+          
+      - name: Start app
+        run: |
+          npm run dev &
+          npx wait-on http://localhost:3000
+          
+      - name: Run AI Test
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          # Install and run Claude Code with Playwright MCP
+          npx @anthropic-ai/claude-code@latest "
+            Use Playwright MCP to test http://localhost:3000:
+            - Navigate to homepage
+            - Check all main elements load
+            - Test navigation
+            - Test checkout flow
+            - Test order complete page
+            - Test payment method page
+            - Test breadcrumbs
+            - Try to add items to cart
+            - Report any issues found
+            - Generate a report of what was tested and each test result and duration
+          " --mcp "npx @playwright/mcp@latest --headless"

@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test:ai": "npx @anthropic-ai/claude-code 'Test http://localhost:3000 with Playwright MCP' --mcp 'npx @playwright/mcp@latest'",
+    "test:ai:headless": "npx @anthropic-ai/claude-code 'Test http://localhost:3000 with Playwright MCP' --mcp 'npx @playwright/mcp@latest --headless'"
   },
   "dependencies": {
     "next": "15.4.6",
