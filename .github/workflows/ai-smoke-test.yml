@@ -15,17 +15,20 @@ jobs:
 
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      MCP_TIMEOUT: "15000"                # wait for mcp to come up
+      MCP_TIMEOUT: "15000"  # wait for mcp to come up
 
     steps:
-      - uses: actions/checkout@v4
+      - name: checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: setup node
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
 
       - name: install deps
+        shell: bash
         run: |
           npm ci
           npm i -g @anthropic-ai/claude-code
@@ -33,12 +36,14 @@ jobs:
           npx playwright install --with-deps
 
       - name: build & start app
+        shell: bash
         run: |
           npm run build
-          npm run start &                     # next start on :3000
+          npm run start &
           npx wait-on http://127.0.0.1:3000 --timeout 120000
 
       - name: write playwright mcp config
+        shell: bash
         run: |
           cat > playwright.mcp.json <<'JSON'
           {
@@ -56,19 +61,18 @@ jobs:
           }
           JSON
 
-          - name: start playwright mcp (sse)
-          run: |
-            npx @playwright/mcp@latest --config playwright.mcp.json --host 127.0.0.1 --port 8931 > mcp.log 2>&1 &
-            echo $! > mcp.pid
-            # wait for socket to be ready (works regardless of /mcp vs /sse)
-            npx wait-on tcp:127.0.0.1:8931 --timeout ${MCP_TIMEOUT:-15000}
-        
+      - name: start playwright mcp (sse)
+        shell: bash
+        run: |
+          npx @playwright/mcp@latest --config playwright.mcp.json --host 127.0.0.1 --port 8931 > mcp.log 2>&1 &
+          echo $! > mcp.pid
+          npx wait-on tcp:127.0.0.1:8931 --timeout ${MCP_TIMEOUT:-15000}
 
-            - name: register mcp with claude (sse)
-            run: |
-              claude mcp add --transport sse playwright http://127.0.0.1:8931/sse --scope local
-              claude mcp list
-          
+      - name: register mcp with claude (sse)
+        shell: bash
+        run: |
+          claude mcp add --transport sse playwright http://127.0.0.1:8931/sse --scope local
+          claude mcp list
 
       - name: run ai tests via claude code
         shell: bash
@@ -98,17 +102,26 @@ jobs:
 
       - name: show results
         if: always()
+        shell: bash
         run: cat test-results.md || true
 
-      - uses: actions/upload-artifact@v4
+      - name: upload artifacts
         if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: ai-test-results-${{ github.run_number }}
           path: |
             test-results.md
             .playwright-mcp-out/**/*.png
+            mcp.log
+
+      - name: dump mcp log (on failure)
+        if: failure()
+        shell: bash
+        run: cat mcp.log || true
 
       - name: cleanup
         if: always()
+        shell: bash
         run: |
           pkill -F mcp.pid || true
