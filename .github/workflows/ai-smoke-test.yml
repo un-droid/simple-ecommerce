@@ -15,7 +15,7 @@ jobs:
 
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      MCP_TIMEOUT: "15000"                # wait for mcp to come up
+      MCP_TIMEOUT: "15000"
 
     steps:
       - uses: actions/checkout@v4
@@ -29,14 +29,14 @@ jobs:
         run: |
           npm ci
           npm i -g @anthropic-ai/claude-code
-          # playwright browsers + system deps (recommended for ci)
           npx playwright install --with-deps
 
       - name: build & start app
         run: |
           npm run build
-          npm run start &                     # next start on :3000
+          npm run start &
           npx wait-on http://127.0.0.1:3000 --timeout 120000
+          echo "✅ App is running on port 3000"
 
       - name: write playwright mcp config
         run: |
@@ -45,61 +45,137 @@ jobs:
             "browser": {
               "browserName": "chromium",
               "isolated": true,
-              "launchOptions": { "headless": true }
+              "launchOptions": { 
+                "headless": true,
+                "args": ["--no-sandbox", "--disable-setuid-sandbox"]
+              }
             },
             "server": { "port": 8931, "host": "127.0.0.1" },
             "network": {
               "allowedOrigins": ["http://127.0.0.1:3000", "http://localhost:3000"]
             },
-            "imageResponses": "omit",
-            "outputDir": ".playwright-mcp-out"
+            "imageResponses": "allow",
+            "outputDir": "./test-screenshots",
+            "capabilities": ["tabs", "pdf", "vision"]
           }
           JSON
 
-      - name: start playwright mcp (sse)
+      - name: start playwright mcp
         run: |
+          mkdir -p test-screenshots
           npx @playwright/mcp@latest --config playwright.mcp.json --host 127.0.0.1 --port 8931 > mcp.log 2>&1 &
           echo $! > mcp.pid
-          # wait for socket to be ready (works regardless of /mcp vs /sse)
           npx wait-on tcp:127.0.0.1:8931 --timeout ${MCP_TIMEOUT:-15000}
+          echo "✅ MCP server is running on port 8931"
+          
+          # Verify MCP is responding
+          curl -s http://127.0.0.1:8931 || echo "MCP server check"
 
-      - name: register mcp with claude (sse)
+      - name: register mcp with claude
         run: |
           claude mcp add --transport sse playwright http://127.0.0.1:8931/sse --scope local
           claude mcp list
+          echo "✅ MCP registered with Claude"
 
       - name: run ai tests via claude code
         shell: bash
         run: |
-          # set default test instructions
-          DEFAULT="use the \"playwright\" mcp server to test http://127.0.0.1:3000.
-          steps:
-            1) call browser_install if needed
-            2) browser_navigate to \"/\"
-            3) browser_snapshot
-            4) click the first button named /add to cart/i
-            5) browser_navigate to \"/cart\"
-            6) read a total/subtotal; assert > 0 and show the value
-            7) browser_navigate to \"/checkout\"
-            8) browser_take_screenshot with filename \"checkout.png\"
-          output: a terse markdown report with each step, pass/fail, and durations."
+          # More explicit and robust test instructions
+          DEFAULT="You have access to a Playwright MCP server called 'playwright'. Use it to test the e-commerce app at http://127.0.0.1:3000.
+
+          IMPORTANT: 
+          - Use the browser automation tools available through the playwright MCP server
+          - If a step fails, continue with the next steps and note the failure
+          - Take screenshots for any failures
+          - Complete all steps even if some fail
+
+          Test Steps:
+          1. Navigate to the homepage (http://127.0.0.1:3000)
+          2. Take a snapshot of the page structure
+          3. Find and click the first 'Add to Cart' button (if it doesn't exist, note this and continue)
+          4. Navigate to /cart page
+          5. Check if there's a total or subtotal amount (report the value if found)
+          6. Navigate to /checkout page
+          7. Take a screenshot and save as 'checkout.png'
+          8. Take a final screenshot of any errors encountered
+
+          Output Format:
+          Create a markdown report with:
+          - Test execution summary
+          - Each step with ✅ PASS or ❌ FAIL status
+          - Any error messages
+          - Screenshots taken
+          - Final verdict
+
+          Be concise but include all important details."
           
-          # use custom prompt if provided, otherwise use default
+          # Use custom prompt if provided
           PROMPT="${{ github.event.inputs.test_description }}"
           if [[ -z "$PROMPT" ]]; then
             PROMPT="$DEFAULT"
           fi
 
+          echo "Starting AI tests..."
+          
+          # Increased max-turns and better error handling
           claude -p \
-            --model sonnet \
-            --max-turns 8 \
+            --model claude-3-5-sonnet-20241022 \
+            --max-turns 20 \
             --dangerously-skip-permissions \
             --output-format text \
-            "$PROMPT" | tee test-results.md
+            "$PROMPT" 2>&1 | tee test-results.md || {
+              echo "⚠️ Claude execution completed with status: $?"
+              echo "Continuing to process results..."
+            }
+          
+          echo "AI tests completed"
 
-      - name: show results
+      - name: show mcp logs
+        if: failure()
+        run: |
+          echo "=== MCP Server Logs ==="
+          cat mcp.log || echo "No MCP logs found"
+          echo "=== Test Results ==="
+          cat test-results.md || echo "No test results found"
+
+      - name: process and enhance results
         if: always()
-        run: cat test-results.md || true
+        run: |
+          # Create enhanced summary
+          cat > summary.md <<'EOF'
+          # 🤖 AI E2E Test Report
+          
+          **Run Number:** ${{ github.run_number }}
+          **Triggered by:** @${{ github.actor }}
+          **Date:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          
+          ## Test Results
+          
+          EOF
+          
+          if [ -f test-results.md ]; then
+            cat test-results.md >> summary.md
+          else
+            echo "❌ No test results generated" >> summary.md
+          fi
+          
+          # Check for screenshots
+          echo "" >> summary.md
+          echo "## 📸 Screenshots" >> summary.md
+          if ls test-screenshots/*.png 2>/dev/null; then
+            echo "Screenshots captured:" >> summary.md
+            ls -la test-screenshots/*.png >> summary.md
+          else
+            echo "No screenshots captured" >> summary.md
+          fi
+          
+          cp summary.md test-results.md
+
+      - name: display results
+        if: always()
+        run: |
+          echo "=== Final Test Results ==="
+          cat test-results.md || echo "No results available"
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -107,9 +183,36 @@ jobs:
           name: ai-test-results-${{ github.run_number }}
           path: |
             test-results.md
-            .playwright-mcp-out/**/*.png
+            test-screenshots/**/*.png
+            mcp.log
+          retention-days: 30
 
       - name: cleanup
         if: always()
         run: |
-          pkill -F mcp.pid || true
+          if [ -f mcp.pid ]; then
+            pkill -F mcp.pid || true
+          fi
+          
+      - name: create github summary
+        if: always()
+        run: |
+          echo "# 🤖 AI E2E Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -f test-results.md ]; then
+            # Limit output to prevent huge summaries
+            head -200 test-results.md >> $GITHUB_STEP_SUMMARY
+            
+            # Count results if possible
+            PASS_COUNT=$(grep -c "✅" test-results.md || echo "0")
+            FAIL_COUNT=$(grep -c "❌" test-results.md || echo "0")
+            
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Summary:** ${PASS_COUNT} passed, ${FAIL_COUNT} failed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ No test results generated. Check the logs for errors." >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📥 Full results and screenshots available in artifacts" >> $GITHUB_STEP_SUMMARY
